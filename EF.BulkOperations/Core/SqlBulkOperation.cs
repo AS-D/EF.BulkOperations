@@ -80,18 +80,52 @@
             return 0;
         }
 
-        private static void Insert<TEntity>(
-            DbContext context,
-            string targetTable,
-            IEnumerable<TEntity> entities,
-            IEnumerable<IPropertyMap> includedColumns,
-            BulkConfig<TEntity> config)
-            where TEntity : class
-        {
-            var dataTable = GetDataTable(includedColumns, entities);
-
-            BulkCopy(context, targetTable, dataTable, config);
-        }
+         private static void Insert<TEntity>(
+             DbContext context,
+             string targetTable,
+             IEnumerable<TEntity> entities,
+             IEnumerable<IPropertyMap> includedColumns,
+             BulkConfig<TEntity> config)
+             where TEntity : class
+         {
+             //var dataTable = GetDataTable(includedColumns, entities);
+        
+             BulkCopy(context, targetTable, entities, includedColumns, config);
+         }
+        
+         private static void BulkCopy<TEntity>(
+             DbContext context, string destinationTableName, IEnumerable<TEntity> entities, IEnumerable<IPropertyMap> includedColumns, BulkConfig<TEntity> config)
+             where TEntity : class
+         {
+             var sqlConnection = (SqlConnection)context.Database.Connection;
+             var ctxTransaction = (SqlTransaction)context.Database.CurrentTransaction.UnderlyingTransaction;
+             var sqlBulkCopyOptions = config.SqlBulkCopyOptions;
+        
+             using (var sqlBulkCopy = new SqlBulkCopy(sqlConnection, sqlBulkCopyOptions, ctxTransaction))
+             {
+                 sqlBulkCopy.DestinationTableName = destinationTableName;
+                 sqlBulkCopy.BatchSize = config.SqlBulkCopyBatchSize;
+                 sqlBulkCopy.NotifyAfter = config.SqlBulkCopyNotifyAfter ?? config.SqlBulkCopyBatchSize;
+                 sqlBulkCopy.SqlRowsCopied += (sender, e) =>
+                 {
+                     if (config.SqlBulkCopyProgressEventHandler != null)
+                     {
+                         config.SqlBulkCopyProgressEventHandler(GetProgress(entities.Count(), e.RowsCopied, config.SqlBulkCopyNotifyAfter));
+                     }
+                 };
+                 sqlBulkCopy.BulkCopyTimeout = config.SqlBulkCopyTimeout ?? sqlBulkCopy.BulkCopyTimeout;
+                 sqlBulkCopy.EnableStreaming = config.SqlBulkCopyEnableStreaming;
+        
+                 foreach (var dataTableColumn in includedColumns)
+                 {
+                     sqlBulkCopy.ColumnMappings.Add(dataTableColumn.ColumnName, dataTableColumn.ColumnName);
+                 }
+                 using (var reader = ObjectReader.Create(entities))
+                 {
+                     sqlBulkCopy.WriteToServer(reader);
+                 }
+             }
+         }
 
         private static DataTable GetDataTable<TEntity>(IEnumerable<IPropertyMap> columns, IEnumerable<TEntity> entities)
                 where TEntity : class
